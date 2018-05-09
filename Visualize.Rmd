@@ -1,0 +1,263 @@
+---
+title: "Визуализация"
+runtime: shiny
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+Сперва построим графики различных параметров в зависимости от времени(в секундах, = <номер кадра> * <интервал между кадрами для данной записи>).
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+require(XML)
+require(ggplot2)
+library(shiny)
+require(rdrop2)
+require(kernlab)
+
+tb <<- 0
+drop_auth(rdstoken = "tokenfile.RDS")
+
+ills <<- as.list(drop_dir('JBD/ill')[2])[[1]]
+donors <<- as.list(drop_dir('JBD/donor')[2])[[1]]
+
+for (mm in ills){
+  adr <- paste(c("JBD/ill",mm),collapse = '/')
+  
+  if (!file.exists(mm)){
+  drop_download(adr, overwrite = TRUE)}
+}
+
+for (mm in donors){
+  adr <- paste(c("JBD/donor",mm),collapse = '/')
+  if (!file.exists(mm)){
+  drop_download(adr, overwrite = TRUE)}
+}
+
+```
+
+
+```{r, include=FALSE}
+parseBr <- function(namef){
+  df = xmlParse(namef, isURL = TRUE)
+  lst <- xmlToList(df)
+  domain1 <- lst$brightnessgraphs$domain1
+  domain2 <- lst$brightnessgraphs$domain2
+  fw <- lst$spatialgraphs$forward$positions
+  bw <- lst$spatialgraphs$backward$positions
+  sp <- lst$spatialgraphs$spontaneous$values
+  
+  pos1 <- regexpr("0", domain1)
+  pos2 <- regexpr("0", domain2)
+  pos3 <- regexpr("0", fw)
+  pos4 <- regexpr("0", bw)
+  pos5 <- regexpr("0", sp)
+  
+  s1 <- substr(domain1, pos1, 10000000)
+  s2 <- substr(domain2, pos2, 10000000)
+  s3 <- substr(fw, pos3, 10000000)
+  s4 <- substr(bw, pos4, 10000000)
+  s5 <- substr(sp, pos5, 10000000)
+  
+  l1 <- strsplit(s1, split = '[ ]')
+  l2 <- strsplit(s2, split = '[ ]')
+  l3 <- strsplit(s3, split = '[ ]')
+  l4 <- strsplit(s4, split = '[ ]')
+  l5 <- strsplit(s5, split = '[ ]')
+  
+  
+  d1 <- as.numeric(l1[[1]])
+  d2 <- as.numeric(l2[[1]])
+  d3 <- as.numeric(l3[[1]])
+  d4 <- as.numeric(l4[[1]])
+  d5 <- as.numeric(l5[[1]])
+  
+  spf <- as.numeric(lst$experiment_setup$scales$spf)
+  return (list("domain1" = d1, "domain2" = d2, "fw" = d3, "bw" = d4, "sp" = d5, "spf" = spf))
+}
+
+```
+
+
+
+```{r eruptions, echo=FALSE}
+
+  inputPanel(
+    selectInput("type","Категория пациентов",choices = c("ill","donor"),selected = "ill"),
+    selectInput("ill","Больные",choices = ills, selected = ills[1]),
+    
+    selectInput("donor","Здоровые",choices = donors, selected = donors[1]),
+    
+    checkboxInput("b1", "brightness-d1", TRUE),
+    checkboxInput("b2", "brightness-d2", FALSE),
+    checkboxInput("fw", "positions-forw", FALSE),
+    checkboxInput("bw", "positions-back", FALSE),
+    checkboxInput("sp", "spontaneous", FALSE),
+    submitButton(text = "Построить"))
+
+wellPanel(
+renderPlot(height = 500, width = 1000,{
+      
+      nm <- 0
+      
+      
+      if (input$type == "ill"){
+        nm <- input$ill
+      }
+      else{
+        nm <- input$donor
+      }
+      
+      l <- parseBr(nm)  
+      g <- ggplot()
+      
+      if (input$b1)
+      {
+        df.b1 <- data.frame(1:length(l$domain1) * l$spf, l$domain1) 
+        colnames(df.b1) <- c("time", "value")
+        g <- g + geom_line(data = df.b1, aes(x=time, y=value, color = "b1"))
+      }
+      
+      if (input$b2)
+      {
+        df.b2 <- data.frame(1:length(l$domain2) * l$spf, l$domain2) 
+        colnames(df.b2) <- c("time", "value")
+        g <- g + geom_line(data = df.b2, aes(x=time, y=value,color = "b2"))
+      }
+      
+      if (input$fw)
+      {
+        df.fw <- data.frame(1:length(l$fw) * l$spf, l$fw) 
+        colnames(df.fw) <- c("time", "value")
+        g <- g + geom_line(data = df.fw, aes(time, value,color = "fw"))
+      }
+      
+      if (input$bw)
+      {
+        df.bw <- data.frame(1:length(l$bw) * l$spf, l$bw) 
+        colnames(df.bw) <- c("time", "value")
+        g <- g + geom_line(data = df.bw, aes(x = time, y =value,color = "bw"))
+      }
+      
+      if (input$sp)
+      {
+        df.sp <- data.frame(1:length(l$sp) * l$spf, l$sp) 
+        colnames(df.sp) <- c("time", "value")
+        g <- g + geom_line(data = df.sp, aes(x = time, y =value, color = "spontaneous"))
+      }
+      
+      plot(g)
+      
+    })
+
+)
+```
+
+Теперь изобразим всех пациентов в осях $(x = argmax(brightness_1), y = argmax(brightness_2))$. Синими точками обозначим больных пациентов, красными точками - здоровых.
+
+```{r, echo=FALSE}
+wellPanel(
+renderPlot(height = 500, width = 1000,{
+  
+  names <- c(NULL)
+  poss1 <- c(NULL)
+  poss2 <- c(NULL)
+  sts <- c(NULL)
+  
+  for (mm in ills){
+    l <- parseBr(mm)
+    names <- c(names, mm)
+    poss1 <- c(poss1, which.max(parseBr(mm)$domain1) * l$spf)
+    poss2 <- c(poss2, which.max(parseBr(mm)$domain2) * l$spf)
+    sts <- c(sts,1)
+  }
+  
+    for (mm in donors){
+    l <- parseBr(mm)
+    names <- c(names, mm)
+    poss1 <- c(poss1, which.max(parseBr(mm)$domain1) * l$spf)
+    poss2 <- c(poss2, which.max(parseBr(mm)$domain2) * l$spf)
+    sts <- c(sts,-1)
+}
+  df_total <<- data.frame("name" = names, "dom1" = poss1, "dom2" = poss2, "state" = sts)
+  
+  g <- ggplot() + geom_point(data = df_total, aes(x = dom1, y = dom2, colour = factor(sts),size = 25)) + scale_size( guide="none") 
+  plot(g)
+  
+  })
+)
+```
+Применим к данным метод опорных векторов. Ядра и параметры метода будем варьировать. При обучении применим k-кросс-валидацию, параметр k будем также варьировать.
+
+Для наглядности напомним формулы и параметры ядер:
+
+- линейное: $u'*v$
+- полиномиальное: $(gamma*u'*v + coef_0)^{degree}$ (параметры: $\gamma, coef_0,degree$)
+- экспоненциальное: $exp(-gamma*|u-v|^2)$(параметры: $\gamma$)
+- сигмоидальное: $\tanh(gamma*u'*v + coef_0)$ (параметры: $\gamma, coef_0$)
+
+```{r}
+inputPanel(#"polydot", "vanilladot","tanhdot"
+  selectInput("method","Метод",choices = c("rbfdot", "vanilladot"),selected = "rbfdot"),
+  selectInput("deg","Степень",choices = c(1,2,3,4,5,6,7,8,9,10),selected = 3),
+  sliderInput("gamma", "gamma", 0.1, 20, 0.5),
+  sliderInput("с_0", "coeff_0", 0.1, 20, 0.5),
+  selectInput("k","cross-k",choices = c(0,3,4,5,6),selected = 3),
+  selectInput("ratio", "Доля trainset", choices = c(0.3,0.5,0.8,0.9),selected = 0.8),
+  submitButton(text = "Построить"))
+
+wellPanel(
+renderPlot(height = 800, width = 1000,{
+  
+  dat <- df_total[,c("dom1","dom2","state")]
+  dat$state <- dat$state
+  n <- length(dat$dom1)
+  ss <- sample(1:n, as.numeric(input$ratio) * n)
+  dat_train <- dat[ss,]  
+  dat_test <- dat[-ss,]
+  rownames(dat_train) <- NULL
+  rownames(dat_test) <- NULL
+  model <- 0
+  
+
+  
+    if (input$method == "vanilladot"){
+          model <- ksvm(x = state~.,data = dat_train, scaled = TRUE, type = "C-svc",
+                 kernel = input$method, cross = 0 )
+    }
+  
+    else if(input$method == "polydot"){
+          model <- ksvm(x = state~.,data = dat_train, scaled = TRUE, type = "C-svc",
+                 kernel = input$method, cross = 0, kpar = list(scale = as.numeric(input$gamma),  degree = as.numeric(input$c_0)))
+    }
+  else if(input$method == "tanhdot"){
+    
+        model <- ksvm(x = state~.,data = dat_train, scaled = TRUE, type = "C-svc",
+                 kernel = input$method, cross = 0, kpar = list(scale = as.numeric(input$gamma),  offset = as.numeric(input$c_0)))
+  }
+  else if(input$method == "rbfdot"){
+        model <- ksvm(x = state~.,data = dat_train, scaled = TRUE, type = "C-svc",
+                 kernel = input$method, cross = 0, kpar = list(sigma = as.numeric(input$gamma) ))
+    
+  }
+  
+
+    
+    pr <- predict(model, dat_train[,c("dom1","dom2")])
+    
+    #print(pr)
+    #print(length(dat_train[, "state"]))
+    tb <<- table(pred = pr, true = dat_train[, "state"])
+    
+
+    kernlab::plot(model, data = dat_train[, c("dom1","dom2")], grid = 100)
+    
+    
+
+}),
+renderTable(tb)
+
+)
+
+```
